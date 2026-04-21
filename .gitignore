@@ -1,0 +1,30 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Environmental Data Pipeline — .gitignore
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Environment variables — NEVER commit .env (contains credentials)
+.env
+
+# Pipeline logs and state files
+logs/
+!logs/airflow/.gitkeep
+
+# Data files generated at runtime (state trackers)
+*_state.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

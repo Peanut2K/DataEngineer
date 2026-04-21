@@ -1,0 +1,20 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Python Dependencies — Environmental Data Pipeline
+# Python >= 3.9 required
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Kafka client
+kafka-python-ng
+
+# MongoDB driver
+pymongo==4.6.1
+
+# HTTP requests (OpenAQ / OpenWeather APIs + Metabase setup)
+requests==2.31.0
+
+# Environment variable management
+python-dotenv==1.0.0
+
+# Data processing (Python 3.14 compatible wheels)
+pandas==3.0.2
+numpy==2.4.4

@@ -1,0 +1,6 @@
+date,province,flood_risk,affected_area_km2,water_level_m,source
+2026-04-21,Bangkok,Medium,151.38,4.49,mock
+2026-04-21,ChiangMai,Low,283.63,3.88,mock
+2026-04-21,Phuket,Low,0.87,1.2,mock
+2026-04-21,KhonKaen,High,421.39,0.56,mock
+2026-04-21,Chon Buri,Medium,95.42,4.0,mock
