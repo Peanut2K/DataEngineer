@@ -21,13 +21,13 @@ x-airflow-common:
     KAFKA_BOOTSTRAP_SERVERS: kafka:29092
     MONGODB_URI: mongodb://admin:password@mongodb:27017
     MONGODB_DATABASE: environmental_db
-    # ── Risk Alert (Email) ───────────────────────────────────────────────────
-    ALERT_EMAIL_USER: 'Sapon2548@gmail.com'
-    ALERT_EMAIL_PASSWORD: 'fqsk srld njbb cjjf'
-    ALERT_EMAIL_TO: 'Sapon2548@gmail.com'
-    ALERT_RISK_THRESHOLD: '50'
-    ALERT_SMTP_HOST: 'smtp.gmail.com'
-    ALERT_SMTP_PORT: '587'
+    # ── Risk Alert (Email) — values loaded from .env ──────────────────────────
+    ALERT_EMAIL_USER: ${ALERT_EMAIL_USER}
+    ALERT_EMAIL_PASSWORD: ${ALERT_EMAIL_PASSWORD}
+    ALERT_EMAIL_TO: ${ALERT_EMAIL_TO}
+    ALERT_RISK_THRESHOLD: ${ALERT_RISK_THRESHOLD:-50}
+    ALERT_SMTP_HOST: ${ALERT_SMTP_HOST:-smtp.gmail.com}
+    ALERT_SMTP_PORT: ${ALERT_SMTP_PORT:-587}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs/airflow:/opt/airflow/logs
