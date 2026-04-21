@@ -49,6 +49,12 @@ def run_silver_to_gold():
     run_silver_to_gold()
 
 
+def check_risk_alert():
+    """Send email alert if any province's risk_score exceeds threshold."""
+    from alerts.risk_alert import check_and_alert
+    check_and_alert()
+
+
 with DAG(
     dag_id="flood_pipeline_daily",
     description="Flood risk data pipeline — runs once per day",
@@ -79,4 +85,9 @@ with DAG(
         python_callable=run_silver_to_gold,
     )
 
-    t_flood >> t_wait >> t_b2s >> t_s2g
+    t_alert = PythonOperator(
+        task_id="check_risk_alert",
+        python_callable=check_risk_alert,
+    )
+
+    t_flood >> t_wait >> t_b2s >> t_s2g >> t_alert

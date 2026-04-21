@@ -67,6 +67,12 @@ def run_silver_to_gold():
     run_silver_to_gold()
 
 
+def check_risk_alert():
+    """Send email alert if any province's risk_score exceeds threshold."""
+    from alerts.risk_alert import check_and_alert
+    check_and_alert()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DAG definition
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,8 +111,13 @@ with DAG(
         python_callable=run_silver_to_gold,
     )
 
+    t_alert = PythonOperator(
+        task_id="check_risk_alert",
+        python_callable=check_risk_alert,
+    )
+
     # ── Dependency chain ─────────────────────────────────────────────────────
     # air_quality ──┐
-    #               ├──→ wait_for_consumer → bronze_to_silver → silver_to_gold
+    #               ├──→ wait_for_consumer → bronze_to_silver → silver_to_gold → check_risk_alert
     # weather     ──┘
-    [t_air, t_weather] >> t_wait >> t_b2s >> t_s2g
+    [t_air, t_weather] >> t_wait >> t_b2s >> t_s2g >> t_alert

@@ -293,7 +293,7 @@ def _create_dashboard(token: str) -> int:
     r = requests.post(
         f"{METABASE_URL}/api/dashboard",
         json={
-            "name":        "🌏 Environmental Risk Dashboard — Thailand",
+            "name":        "Environmental Risk Dashboard — Thailand",
             "description": "Real-time PM2.5 · Weather · Flood · Overall Risk by province",
         },
         headers=_h(token),
