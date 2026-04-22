@@ -68,7 +68,7 @@ def run_silver_to_gold():
 
 
 def check_risk_alert():
-    """Send email alert if any province's risk_score exceeds threshold."""
+    """Send email alert if composite risk_score > threshold (PM2.5 + Temp + Flood)."""
     from alerts.risk_alert import check_and_alert
     check_and_alert()
 

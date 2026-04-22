@@ -35,26 +35,37 @@ from utils.logger import get_logger
 
 logger = get_logger("bronze_to_silver")
 
-_STATE_FILE = os.path.join("logs", "silver_state.json")
+_LOGS_DIR = "logs"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# State management (incremental processing)
+# State management (incremental processing — per-source state files)
 # ─────────────────────────────────────────────────────────────────────────────
+# Each source gets its own state file so that the flood pipeline and the
+# environmental pipeline never overwrite each other's last-processed timestamp.
+#   logs/silver_state_air_quality.json
+#   logs/silver_state_weather.json
+#   logs/silver_state_flood.json
 
-def _load_state() -> Optional[str]:
-    """Return the ISO timestamp of the last Silver run, or None."""
+def _state_file(sources: list) -> str:
+    """Return the state file path for the given source list."""
+    key = "_".join(sorted(sources))
+    return os.path.join(_LOGS_DIR, f"silver_state_{key}.json")
+
+
+def _load_state(sources: list) -> Optional[str]:
+    """Return the ISO timestamp of the last Silver run for these sources, or None."""
     try:
-        with open(_STATE_FILE, "r") as fh:
+        with open(_state_file(sources), "r") as fh:
             return json.load(fh).get("last_processed")
     except FileNotFoundError:
         return None
 
 
-def _save_state() -> None:
+def _save_state(sources: list) -> None:
     """Persist the current UTC timestamp for the next incremental run."""
-    os.makedirs(os.path.dirname(_STATE_FILE), exist_ok=True)
-    with open(_STATE_FILE, "w") as fh:
+    os.makedirs(_LOGS_DIR, exist_ok=True)
+    with open(_state_file(sources), "w") as fh:
         json.dump({"last_processed": datetime.now(timezone.utc).isoformat()}, fh)
 
 
@@ -339,7 +350,7 @@ def run_bronze_to_silver(sources: list = None) -> None:
 
     try:
         _setup_silver_indexes(db)
-        since = _load_state()
+        since = _load_state(sources)
         if since:
             logger.info(f"Incremental mode — processing Bronze records newer than {since}")
 
@@ -372,7 +383,7 @@ def run_bronze_to_silver(sources: list = None) -> None:
         _upsert_silver(db, SILVER_COLLECTIONS["joined"], joined,
                        ["province", "date"])
 
-        _save_state()
+        _save_state(sources)
         logger.info("Bronze → Silver — completed successfully")
 
     except Exception as exc:

@@ -50,9 +50,9 @@ def run_silver_to_gold():
 
 
 def check_risk_alert():
-    """Send email alert if any province's risk_score exceeds threshold."""
-    from alerts.risk_alert import check_and_alert
-    check_and_alert()
+    """Send flood alert if any province has High or Very High flood risk."""
+    from alerts.risk_alert import check_flood_alert
+    check_flood_alert()
 
 
 with DAG(

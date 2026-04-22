@@ -1,10 +1,15 @@
 """
 alerts/risk_alert.py
 ─────────────────────
-Read the latest Gold fact records from MongoDB and send an email alert
-when any province's risk_score exceeds RISK_THRESHOLD (default: 50).
+Read the latest Gold fact records from MongoDB and send email alerts.
 
-Called as an Airflow task at the end of both pipeline DAGs.
+Two modes:
+  - "overall" : alert when composite risk_score > RISK_THRESHOLD (default 50)
+                Used by environmental_pipeline_hourly (PM2.5 + Temp + Flood)
+  - "flood"   : alert when flood_risk is High or Very High
+                Used by flood_pipeline_daily
+
+Called as an Airflow task at the end of each pipeline DAG.
 """
 
 import os
@@ -21,12 +26,247 @@ from utils.logger import get_logger
 logger = get_logger("risk_alert")
 
 # ── Configuration (overridable via environment variables) ─────────────────────
-RISK_THRESHOLD = float(os.getenv("ALERT_RISK_THRESHOLD", "50"))
-SMTP_HOST      = os.getenv("ALERT_SMTP_HOST",     "smtp.gmail.com")
-SMTP_PORT      = int(os.getenv("ALERT_SMTP_PORT", "587"))
-SMTP_USER      = os.getenv("ALERT_EMAIL_USER",     "")
-SMTP_PASSWORD  = os.getenv("ALERT_EMAIL_PASSWORD", "")
-ALERT_TO       = os.getenv("ALERT_EMAIL_TO",       "")
+RISK_THRESHOLD  = float(os.getenv("ALERT_RISK_THRESHOLD", "50"))
+SMTP_HOST       = os.getenv("ALERT_SMTP_HOST",     "smtp.gmail.com")
+SMTP_PORT       = int(os.getenv("ALERT_SMTP_PORT", "587"))
+SMTP_USER       = os.getenv("ALERT_EMAIL_USER",     "")
+SMTP_PASSWORD   = os.getenv("ALERT_EMAIL_PASSWORD", "")
+ALERT_TO        = os.getenv("ALERT_EMAIL_TO",       "")
+
+_HIGH_FLOOD_LEVELS = {"High", "Very High"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Email builders
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _risk_color(level: str) -> str:
+    return {
+        "Critical":  "#d32f2f",
+        "High":      "#f57c00",
+        "Moderate":  "#fbc02d",
+        "Low":       "#388e3c",
+        "Very High": "#d32f2f",
+        "Medium":    "#fbc02d",
+    }.get(level, "#000")
+
+
+def _build_overall_email(high_risk: list) -> MIMEMultipart:
+    """Email for composite risk_score alert (environmental pipeline)."""
+    subject = (
+        f"⚠️ Environmental Risk Alert — "
+        f"{len(high_risk)} province(s) with Risk Score > {int(RISK_THRESHOLD)}"
+    )
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    rows = ""
+    for rec in sorted(high_risk, key=lambda r: r.get("risk_score", 0), reverse=True):
+        level = rec.get("risk_level", "—")
+        score = rec.get("risk_score", 0)
+        pm25  = rec.get("pm25", "N/A")
+        temp  = rec.get("temperature", "N/A")
+        flood = rec.get("flood_risk", "N/A")
+        color = _risk_color(level)
+        rows += f"""
+        <tr>
+          <td style="padding:8px;border:1px solid #ddd;">{rec['province']}</td>
+          <td style="padding:8px;border:1px solid #ddd;">{rec.get('date','—')}</td>
+          <td style="padding:8px;border:1px solid #ddd;font-weight:bold;color:{color};">{score}</td>
+          <td style="padding:8px;border:1px solid #ddd;color:{color};">{level}</td>
+          <td style="padding:8px;border:1px solid #ddd;">{pm25 if pm25 == 'N/A' else f'{pm25:.1f} µg/m³'}</td>
+          <td style="padding:8px;border:1px solid #ddd;">{temp if temp == 'N/A' else f'{temp:.1f} °C'}</td>
+          <td style="padding:8px;border:1px solid #ddd;">{flood}</td>
+        </tr>"""
+
+    html = f"""
+    <html><body style="font-family:sans-serif;color:#333;">
+      <h2 style="color:#c62828;">⚠️ Environmental Risk Alert</h2>
+      <p>The following province(s) have a <strong>Risk Score &gt; {int(RISK_THRESHOLD)}</strong>
+         as of <em>{now_str}</em>:</p>
+      <table style="border-collapse:collapse;width:100%;">
+        <thead style="background:#f5f5f5;">
+          <tr>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Province</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Date</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Risk Score</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Level</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">PM2.5</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Temperature</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Flood Risk</th>
+          </tr>
+        </thead>
+        <tbody>{rows}</tbody>
+      </table>
+      <p style="margin-top:16px;font-size:12px;color:#888;">
+        Risk Score formula: PM2.5 × 0.5 + Temp × 0.2 + Flood × 0.3 (scale 0–100)<br>
+        Sent by Environmental Data Pipeline · Airflow
+      </p>
+    </body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_USER
+    msg["To"]      = ALERT_TO
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    return msg
+
+
+def _build_flood_email(high_flood: list) -> MIMEMultipart:
+    """Email for flood risk alert (flood pipeline)."""
+    subject = (
+        f"🌊 Flood Risk Alert — "
+        f"{len(high_flood)} province(s) with High / Very High flood risk"
+    )
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    rows = ""
+    for rec in sorted(high_flood, key=lambda r: r.get("flood_score", 0), reverse=True):
+        flood = rec.get("flood_risk", "—")
+        color = _risk_color(flood)
+        rows += f"""
+        <tr>
+          <td style="padding:8px;border:1px solid #ddd;">{rec['province']}</td>
+          <td style="padding:8px;border:1px solid #ddd;">{rec.get('date','—')}</td>
+          <td style="padding:8px;border:1px solid #ddd;font-weight:bold;color:{color};">{flood}</td>
+          <td style="padding:8px;border:1px solid #ddd;">{rec.get('affected_area_km2', 'N/A')}</td>
+          <td style="padding:8px;border:1px solid #ddd;">{rec.get('water_level_m', 'N/A')}</td>
+        </tr>"""
+
+    html = f"""
+    <html><body style="font-family:sans-serif;color:#333;">
+      <h2 style="color:#1565c0;">🌊 Flood Risk Alert</h2>
+      <p>The following province(s) have <strong>High or Very High</strong> flood risk
+         as of <em>{now_str}</em>:</p>
+      <table style="border-collapse:collapse;width:100%;">
+        <thead style="background:#e3f2fd;">
+          <tr>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Province</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Date</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Flood Risk</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Affected Area (km²)</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Water Level (m)</th>
+          </tr>
+        </thead>
+        <tbody>{rows}</tbody>
+      </table>
+      <p style="margin-top:16px;font-size:12px;color:#888;">
+        Source: Daily flood risk data · Sent by Environmental Data Pipeline · Airflow
+      </p>
+    </body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_USER
+    msg["To"]      = ALERT_TO
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    return msg
+
+
+def _send_email(msg: MIMEMultipart) -> None:
+    """Send email via Gmail SMTP with STARTTLS."""
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.sendmail(SMTP_USER, ALERT_TO, msg.as_string())
+    logger.info(f"Alert email sent to {ALERT_TO}")
+
+
+def _get_latest_per_province(coll) -> list:
+    """Aggregate latest Gold record per province."""
+    return list(coll.aggregate([
+        {"$sort": {"_ingested_at": DESCENDING}},
+        {"$group": {
+            "_id":              "$province",
+            "province":         {"$first": "$province"},
+            "date":             {"$first": "$date"},
+            "risk_score":       {"$first": "$risk_score"},
+            "risk_level":       {"$first": "$risk_level"},
+            "pm25":             {"$first": "$pm25"},
+            "temperature":      {"$first": "$temperature"},
+            "flood_risk":       {"$first": "$flood_risk"},
+            "flood_score":      {"$first": "$flood_score"},
+            "affected_area_km2":{"$first": "$affected_area_km2"},
+            "water_level_m":    {"$first": "$water_level_m"},
+        }},
+    ]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public entry points (called by Airflow tasks)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_and_alert() -> None:
+    """
+    Overall risk alert — used by environmental_pipeline_hourly.
+    Triggers when composite risk_score > RISK_THRESHOLD (default 50).
+    """
+    if not SMTP_USER or not SMTP_PASSWORD or not ALERT_TO:
+        logger.warning("Email credentials not configured — skipping alert check.")
+        return
+
+    client = MongoClient(MONGODB_URI)
+    try:
+        coll   = client[MONGODB_DATABASE][GOLD_COLLECTIONS["fact"]]
+        latest = _get_latest_per_province(coll)
+
+        if not latest:
+            logger.info("No Gold records found — skipping alert check.")
+            return
+
+        high_risk = [r for r in latest if (r.get("risk_score") or 0) > RISK_THRESHOLD]
+
+        for rec in latest:
+            score = rec.get("risk_score", 0)
+            flag  = " ← ALERT" if score > RISK_THRESHOLD else ""
+            logger.info(f"{rec['province']}: risk_score={score} (level={rec.get('risk_level','?')}){flag}")
+
+        if not high_risk:
+            logger.info(f"All provinces within safe range (threshold={int(RISK_THRESHOLD)}). No alert sent.")
+            return
+
+        logger.warning(f"{len(high_risk)} province(s) exceed risk_score threshold: {[r['province'] for r in high_risk]}")
+        _send_email(_build_overall_email(high_risk))
+
+    finally:
+        client.close()
+
+
+def check_flood_alert() -> None:
+    """
+    Flood-specific alert — used by flood_pipeline_daily.
+    Triggers when flood_risk is 'High' or 'Very High' (ignores composite score).
+    """
+    if not SMTP_USER or not SMTP_PASSWORD or not ALERT_TO:
+        logger.warning("Email credentials not configured — skipping flood alert check.")
+        return
+
+    client = MongoClient(MONGODB_URI)
+    try:
+        coll   = client[MONGODB_DATABASE][GOLD_COLLECTIONS["fact"]]
+        latest = _get_latest_per_province(coll)
+
+        if not latest:
+            logger.info("No Gold records found — skipping flood alert check.")
+            return
+
+        high_flood = [r for r in latest if r.get("flood_risk") in _HIGH_FLOOD_LEVELS]
+
+        for rec in latest:
+            flood = rec.get("flood_risk", "?")
+            flag  = " ← FLOOD ALERT" if flood in _HIGH_FLOOD_LEVELS else ""
+            logger.info(f"{rec['province']}: flood_risk={flood}{flag}")
+
+        if not high_flood:
+            logger.info("All provinces have Low/Medium flood risk. No flood alert sent.")
+            return
+
+        logger.warning(f"{len(high_flood)} province(s) with High/Very High flood risk: {[r['province'] for r in high_flood]}")
+        _send_email(_build_flood_email(high_flood))
+
+    finally:
+        client.close()
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

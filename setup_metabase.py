@@ -293,7 +293,7 @@ def _create_dashboard(token: str) -> int:
     r = requests.post(
         f"{METABASE_URL}/api/dashboard",
         json={
-            "name":        "Environmental Risk Dashboard — Thailand",
+            "name":        DASHBOARD_NAME,
             "description": "Real-time PM2.5 · Weather · Flood · Overall Risk by province",
         },
         headers=_h(token),
@@ -390,6 +390,16 @@ def _update_card_to_heatmap(token: str, card_id: int, card_name: str, metric_col
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _dashboard_exists(token: str, name: str) -> bool:
+    """Return True if a dashboard with this exact name already exists."""
+    r = requests.get(f"{METABASE_URL}/api/dashboard", headers=_h(token))
+    r.raise_for_status()
+    return any(d.get("name") == name for d in r.json())
+
+
+DASHBOARD_NAME = "Environmental Risk Dashboard — Thailand"
+
+
 def main() -> None:
     # 1. Wait for Metabase
     if not _wait_for_metabase():
@@ -406,6 +416,15 @@ def main() -> None:
 
     # 3. Login
     token = _login()
+
+    # ── Idempotency check — skip if dashboard already exists ─────────────────
+    if _dashboard_exists(token, DASHBOARD_NAME):
+        print(
+            f"ℹ️  Dashboard '{DASHBOARD_NAME}' already exists — skipping setup.\n"
+            f"   Delete it in Metabase first if you want to re-run setup.",
+            flush=True,
+        )
+        return
 
     # 4. Add MongoDB
     db_id = _add_mongodb(token)
