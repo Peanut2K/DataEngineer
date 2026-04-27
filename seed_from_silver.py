@@ -152,12 +152,15 @@ def _build_fact_record(silver: dict) -> dict:
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python seed_from_silver.py <path_to_silver_joined.json>")
-        sys.exit(1)
+_DEFAULT_JSON = Path(__file__).parent / "data" / "seed" / "silver_environmental_joined.json"
 
-    json_path = Path(sys.argv[1])
+
+def main():
+    if len(sys.argv) >= 2:
+        json_path = Path(sys.argv[1])
+    else:
+        json_path = _DEFAULT_JSON
+
     if not json_path.exists():
         print(f"File not found: {json_path}")
         sys.exit(1)
