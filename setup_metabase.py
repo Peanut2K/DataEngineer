@@ -247,6 +247,129 @@ def _q_table_risk() -> str:
     return json.dumps(pipeline)
 
 
+# ── Multi-dimensional / Correlation queries ───────────────────────────────────
+
+def _q_bar_weather_impact() -> str:
+    """Pivoted: Category dimension + Lower/Moderate/Higher/Neutral columns — distinct coloured bars."""
+    pipeline = [
+        {"$match": {"weather_pm25_impact": {"$ne": None}, "pm25": {"$gt": 0}}},
+        {"$group": {
+            "_id": None,
+            "Category": {"$first": {"$literal": "Avg PM2.5 by Weather Impact"}},
+            "Lower":    {"$avg": {"$cond": [{"$eq": ["$weather_pm25_impact", "Lower"]},    "$pm25", None]}},
+            "Moderate": {"$avg": {"$cond": [{"$eq": ["$weather_pm25_impact", "Moderate"]}, "$pm25", None]}},
+            "Higher":   {"$avg": {"$cond": [{"$eq": ["$weather_pm25_impact", "Higher"]},   "$pm25", None]}},
+            "Neutral":  {"$avg": {"$cond": [{"$eq": ["$weather_pm25_impact", "Neutral"]},  "$pm25", None]}},
+        }},
+        {"$project": {"_id": 0}},
+    ]
+    return json.dumps(pipeline)
+
+
+def _q_bar_rainy_pm25() -> str:
+    """Pivoted: Category dimension + Non_Rainy / Rainy columns — distinct coloured bars."""
+    pipeline = [
+        {"$match": {"pm25": {"$gt": 0}}},
+        {"$group": {
+            "_id": None,
+            "Category":  {"$first": {"$literal": "Avg PM2.5 Rainy vs Non-Rainy"}},
+            "Non_Rainy": {"$avg": {"$cond": ["$is_rainy", None, "$pm25"]}},
+            "Rainy":     {"$avg": {"$cond": ["$is_rainy", "$pm25", None]}},
+        }},
+        {"$project": {"_id": 0}},
+    ]
+    return json.dumps(pipeline)
+
+
+def _q_timeseries_daily() -> str:
+    """Daily avg PM2.5 (bar) + avg Humidity (line) — combo chart."""
+    pipeline = [
+        {"$match": {"pm25": {"$ne": None}, "humidity": {"$ne": None}}},
+        {"$group": {
+            "_id":      "$date",
+            "Date":     {"$first": "$date"},
+            "PM25":     {"$avg": "$pm25"},
+            "Humidity": {"$avg": "$humidity"},
+        }},
+        {"$project": {"_id": 0}},
+        {"$sort": {"Date": 1}},
+    ]
+    return json.dumps(pipeline)
+
+
+def _q_timeseries_by_province() -> str:
+    """Daily PM2.5 per province — multi-line trend chart."""
+    pipeline = [
+        {"$match": {"pm25": {"$ne": None}}},
+        {"$group": {
+            "_id":      {"date": "$date", "province": "$province"},
+            "Date":     {"$first": "$date"},
+            "Province": {"$first": "$province"},
+            "PM25":     {"$avg": "$pm25"},
+        }},
+        {"$project": {"_id": 0}},
+        {"$sort": {"Date": 1, "Province": 1}},
+    ]
+    return json.dumps(pipeline)
+
+
+def _q_weather_vs_flood() -> str:
+    """Weather condition × Flood Risk → Avg Risk Score."""
+    pipeline = [
+        {"$match": {"weather_condition": {"$ne": None}, "flood_risk": {"$ne": None}}},
+        {"$group": {
+            "_id": {"weather": "$weather_condition", "flood": "$flood_risk"},
+            "Weather":        {"$first": "$weather_condition"},
+            "Flood_Risk":     {"$first": "$flood_risk"},
+            "Avg_Risk_Score": {"$avg": "$risk_score"},
+            "Count":          {"$sum": 1},
+        }},
+        {"$project": {"_id": 0}},
+        {"$sort": {"Weather": 1, "Flood_Risk": 1}},
+    ]
+    return json.dumps(pipeline)
+
+
+# ── Hourly queries (from silver_environmental_joined) ─────────────────────────
+
+def _q_hourly_trend() -> str:
+    """Hourly avg PM2.5 (bar) + avg Humidity (line) — last 24 data points from Gold."""
+    pipeline = [
+        {"$match": {"hour_bucket": {"$ne": None}}},
+        {"$group": {
+            "_id":      "$hour_bucket",
+            # Strip year: "2026-04-23 00:00" -> "04-23 00:00"
+            "Hour":     {"$first": {"$substrCP": ["$hour_bucket", 5, 11]}},
+            "PM25":     {"$avg": "$pm25"},
+            "Humidity": {"$avg": "$humidity"},
+        }},
+        {"$sort": {"_id": -1}},
+        {"$limit": 24},
+        {"$sort": {"_id": 1}},
+        {"$project": {"_id": 0}},
+    ]
+    return json.dumps(pipeline)
+
+
+def _q_hourly_by_province() -> str:
+    """Hourly PM2.5 per province — multi-line trend (last 24 unique hours)."""
+    pipeline = [
+        {"$match": {"hour_bucket": {"$ne": None}}},
+        {"$group": {
+            "_id":      {"h": "$hour_bucket", "p": "$province"},
+            # Strip year: "2026-04-23 00:00" -> "04-23 00:00"
+            "Hour":     {"$first": {"$substrCP": ["$hour_bucket", 5, 11]}},
+            "Province": {"$first": "$province"},
+            "PM25":     {"$avg": "$pm25"},
+        }},
+        {"$sort": {"_id.h": -1}},
+        {"$limit": 120},
+        {"$sort": {"_id.h": 1, "_id.p": 1}},
+        {"$project": {"_id": 0}},
+    ]
+    return json.dumps(pipeline)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Card / Question Builders
 # ─────────────────────────────────────────────────────────────────────────────
@@ -265,16 +388,14 @@ def _map_viz(metric_label: str) -> dict:
 
 def _create_card(token: str, db_id: int, name: str, display: str,
                  collection: str, query: str, viz: dict) -> int:
+    native_block: dict = {"collection": collection, "query": query}
     payload = {
         "name":    name,
         "display": display,
         "dataset_query": {
             "database": db_id,
             "type":     "native",
-            "native": {
-                "collection": collection,
-                "query":      query,
-            },
+            "native":   native_block,
         },
         "visualization_settings": viz,
     }
@@ -307,7 +428,7 @@ def _create_dashboard(token: str) -> int:
 def _add_all_cards_to_dashboard(
     token: str,
     dash_id: int,
-    placements: list,          # list of (card_id, col, row, size_x, size_y)
+    placements: list,
 ) -> None:
     """
     Metabase v0.46+ API: all dashcards are submitted in one PUT request.
@@ -507,6 +628,132 @@ def main() -> None:
         viz={},
     )
 
+    # ── Multi-dimensional / Correlation ───────────────────────────────────────
+    print("\n📊 Creating correlation analysis cards …", flush=True)
+
+    corr_impact_id = _create_card(
+        token, db_id,
+        name="Weather Impact on PM2.5 — Avg PM2.5 by Weather Type",
+        display="bar",
+        collection="fact_environmental",
+        query=_q_bar_weather_impact(),
+        viz={
+            "graph.dimensions":        ["Category"],
+            "graph.metrics":           ["Lower", "Moderate", "Higher", "Neutral"],
+            "graph.y_axis.title_text": "Average PM2.5 (µg/m³)",
+            "series_settings": {
+                "Lower":    {"color": "#4C9BE8"},
+                "Moderate": {"color": "#F9CF48"},
+                "Higher":   {"color": "#ED6E6E"},
+                "Neutral":  {"color": "#84BB4C"},
+            },
+        },
+    )
+    corr_rainy_id = _create_card(
+        token, db_id,
+        name="Rainy vs Non-Rainy — Avg PM2.5 Comparison",
+        display="bar",
+        collection="fact_environmental",
+        query=_q_bar_rainy_pm25(),
+        viz={
+            "graph.dimensions":        ["Category"],
+            "graph.metrics":           ["Non_Rainy", "Rainy"],
+            "graph.y_axis.title_text": "Average PM2.5 (µg/m³)",
+            "graph.y_axis.auto_split": False,
+            "series_settings": {
+                "Non_Rainy": {"color": "#84BB4C", "axis": "left"},
+                "Rainy":     {"color": "#4C9BE8", "axis": "left"},
+            },
+        },
+    )
+
+    # ── Time Series ───────────────────────────────────────────────────────────
+    print("\n📊 Creating time series cards …", flush=True)
+
+    timeseries_id = _create_card(
+        token, db_id,
+        name="PM2.5 & Humidity — Daily Trend (All Provinces)",
+        display="combo",
+        collection="fact_environmental",
+        query=_q_timeseries_daily(),
+        viz={
+            "graph.dimensions": ["Date"],
+            "graph.metrics":    ["PM25", "Humidity"],
+            "graph.show_goal":  False,
+            "series_settings": {
+                "PM25":     {"display": "bar",  "axis": "left",  "color": "#F9A96E"},
+                "Humidity": {"display": "line", "axis": "right", "color": "#4C9BE8",
+                             "line.size": "L", "line.marker_size": 8},
+            },
+        },
+    )
+    timeseries_prov_id = _create_card(
+        token, db_id,
+        name="PM2.5 by Province — Daily Trend",
+        display="line",
+        collection="fact_environmental",
+        query=_q_timeseries_by_province(),
+        viz={
+            "graph.dimensions":  ["Date", "Province"],
+            "graph.metrics":     ["PM25"],
+            "graph.y_axis.title_text": "PM2.5 (µg/m³)",
+            "line.size":         "L",
+            "line.marker_size":  8,
+        },
+    )
+
+    # ── Weather × Flood Correlation ───────────────────────────────────────────
+    print("\n📊 Creating weather × flood correlation card …", flush=True)
+
+    weather_flood_id = _create_card(
+        token, db_id,
+        name="Weather Condition × Flood Risk — Avg Risk Score",
+        display="bar",
+        collection="fact_environmental",
+        query=_q_weather_vs_flood(),
+        viz={
+            "graph.dimensions":        ["Weather", "Flood_Risk"],
+            "graph.metrics":           ["Avg_Risk_Score"],
+            "graph.x_axis.title_text": "Weather Condition",
+            "graph.y_axis.title_text": "Average Risk Score",
+        },
+    )
+
+    # ── Hourly trend (from silver_environmental_joined) ───────────────────────
+    print("\n📈 Creating hourly trend cards (Silver) …", flush=True)
+
+    hourly_trend_id = _create_card(
+        token, db_id,
+        name="PM2.5 & Humidity — Hourly Trend (Last 24h)",
+        display="combo",
+        collection="fact_environmental",
+        query=_q_hourly_trend(),
+        viz={
+            "graph.dimensions": ["Hour"],
+            "graph.metrics":    ["PM25", "Humidity"],
+            "graph.show_goal":  False,
+            "series_settings": {
+                "PM25":     {"display": "bar",  "axis": "left",  "color": "#F9A96E"},
+                "Humidity": {"display": "line", "axis": "right", "color": "#4C9BE8",
+                             "line.size": "L", "line.marker_size": 6},
+            },
+        },
+    )
+    hourly_prov_id = _create_card(
+        token, db_id,
+        name="PM2.5 by Province — Hourly Trend (Last 24h)",
+        display="line",
+        collection="fact_environmental",
+        query=_q_hourly_by_province(),
+        viz={
+            "graph.dimensions": ["Hour", "Province"],
+            "graph.metrics":    ["PM25"],
+            "graph.y_axis.title_text": "PM2.5 (µg/m³)",
+            "line.size":        "L",
+            "line.marker_size": 6,
+        },
+    )
+
     # 7. Create dashboard
     print("\n🗂️  Building dashboard …", flush=True)
     dash_id = _create_dashboard(token)
@@ -526,9 +773,21 @@ def main() -> None:
         (flood_map_id,  0, 18, 12, 9),
         (flood_tbl_id, 12, 18, 12, 9),
         # ── Overall Risk ───────────────────────────
-        (risk_map_id,  0,  27, 12, 9),
-        (risk_tbl_id, 12,  27, 12, 9),
+        (risk_map_id,  0, 27, 12, 9),
+        (risk_tbl_id, 12, 27, 12, 9),
+        # ── Correlation (Weather Impact / Rainy) ───
+        (corr_impact_id,  0, 36, 12, 9),
+        (corr_rainy_id,  12, 36, 12, 9),
+        # ── Time Series (Daily) ─────────────────────────────
+        (timeseries_id,       0, 45, 24, 9),   # PM2.5 + Humidity daily combo (full width)
+        (timeseries_prov_id,  0, 54, 24, 9),   # PM2.5 per province daily line (full width)
+        # ── Weather × Flood Correlation ────────────
+        (weather_flood_id,    0, 63, 24, 9),   # Weather × Flood risk score (full width)
+        # ── Hourly View (Silver — last 72h) ────────
+        (hourly_trend_id,     0, 72, 24, 9),   # PM2.5 + Humidity hourly combo (full width)
+        (hourly_prov_id,      0, 81, 24, 9),   # PM2.5 per province hourly line (full width)
     ]
+    # Cards that have DATE_TAGS template variables and should respond to the filter
     _add_all_cards_to_dashboard(token, dash_id, placements)
 
     # 9. Convert bubble maps → choropleth heatmaps

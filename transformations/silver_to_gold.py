@@ -204,20 +204,90 @@ def _build_dim_time(db, date_str: str) -> None:
 # Fact Table Builder
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _heat_index(temp: Optional[float], humidity: Optional[float]) -> Optional[float]:
+    """
+    Simplified Heat Index (feels-like temperature).
+    Steadman formula approximation, valid when temp >= 27°C and humidity >= 40%.
+    Returns None if inputs are unavailable or conditions not met.
+    """
+    if temp is None or humidity is None:
+        return None
+    if temp < 27 or humidity < 40:
+        return round(temp, 1)
+    hi = (
+        -8.78469475556
+        + 1.61139411 * temp
+        + 2.33854883889 * humidity
+        - 0.14611605 * temp * humidity
+        - 0.012308094 * temp ** 2
+        - 0.0164248277778 * humidity ** 2
+        + 0.002211732 * temp ** 2 * humidity
+        + 0.00072546 * temp * humidity ** 2
+        - 0.000003582 * temp ** 2 * humidity ** 2
+    )
+    return round(hi, 1)
+
+
+def _pm25_category(pm25: Optional[float]) -> str:
+    """Human-readable PM2.5 air quality category (aligned with Thai PCD standard)."""
+    if pm25 is None:
+        return "Unknown"
+    if pm25 <= 25:
+        return "Good"
+    if pm25 <= 37:
+        return "Moderate"
+    if pm25 <= 50:
+        return "Unhealthy for Sensitive Groups"
+    if pm25 <= 90:
+        return "Unhealthy"
+    return "Very Unhealthy"
+
+
+def _humidity_level(humidity: Optional[float]) -> str:
+    """Classify relative humidity into Low / Normal / High."""
+    if humidity is None:
+        return "Unknown"
+    if humidity < 40:
+        return "Low"
+    if humidity <= 70:
+        return "Normal"
+    return "High"
+
+
+def _weather_pm25_impact(weather_condition: Optional[str]) -> str:
+    """
+    Estimate weather condition's expected impact on PM2.5 dispersion.
+    Rain washes particles → Lower PM2.5 expected.
+    Clear/hot days trap particles → Higher PM2.5 expected.
+    """
+    if not weather_condition:
+        return "Unknown"
+    cond = weather_condition.lower()
+    if any(w in cond for w in ["rain", "drizzle", "thunderstorm", "shower"]):
+        return "Lower"   # rain washes PM2.5
+    if any(w in cond for w in ["clear", "sunny", "hot"]):
+        return "Higher"  # stagnant air traps PM2.5
+    if any(w in cond for w in ["cloud", "overcast", "mist", "fog", "haze"]):
+        return "Moderate"
+    return "Neutral"
+
+
 def _build_fact_record(joined: dict) -> dict:
     """Transform one silver_joined record into a gold fact record."""
-    pm25        = joined.get("pm25")
-    temperature = joined.get("temperature")
-    flood_risk  = joined.get("flood_risk")
-    province    = joined.get("province")
+    pm25              = joined.get("pm25")
+    temperature       = joined.get("temperature")
+    humidity          = joined.get("humidity")
+    flood_risk        = joined.get("flood_risk")
+    weather_condition = joined.get("weather_condition")
+    province          = joined.get("province")
 
     scores = calculate_risk(pm25, temperature, flood_risk)
     coords = _PROVINCE_COORDS.get(province, {})
 
     return {
         # ── Dimension foreign keys ────────────────────────────────────────────
-        "province": province,         # → dim_location
-        "date":     joined.get("date"),       # → dim_time
+        "province": province,
+        "date":     joined.get("date"),
 
         # ── Geo coordinates (for Metabase map) ───────────────────────────────
         "lat": coords.get("lat"),
@@ -226,9 +296,11 @@ def _build_fact_record(joined: dict) -> dict:
         # ── Measures ─────────────────────────────────────────────────────────
         "pm25":              pm25,
         "temperature":       temperature,
-        "humidity":          joined.get("humidity"),
-        "weather_condition": joined.get("weather_condition"),
-        "flood_risk":        flood_risk,
+        "humidity":          humidity,
+        "weather_condition":   weather_condition,
+        # Detailed description from OpenWeatherMap e.g. "light rain", "broken clouds"
+        "weather_description": joined.get("weather_description"),
+        "flood_risk":          flood_risk,
         "affected_area_km2": joined.get("affected_area_km2"),
         "water_level_m":     joined.get("water_level_m"),
 
@@ -238,6 +310,21 @@ def _build_fact_record(joined: dict) -> dict:
         "flood_score": scores["flood_score"],
         "risk_score":  scores["risk_score"],
         "risk_level":  scores["risk_level"],
+
+        # ── Multi-dimensional Analysis ────────────────────────────────────────
+        # Human-readable PM2.5 quality label (Good / Moderate / Unhealthy …)
+        "pm25_category":          _pm25_category(pm25),
+        # Feels-like temperature using Heat Index formula (temp + humidity)
+        "heat_index":             _heat_index(temperature, humidity),
+        # Humidity classification (Low / Normal / High)
+        "humidity_level":         _humidity_level(humidity),
+        # Expected effect of weather on PM2.5 (Lower / Higher / Moderate / Neutral)
+        "weather_pm25_impact":    _weather_pm25_impact(weather_condition),
+        # Is it raining? (boolean for easy filter in Metabase)
+        "is_rainy":               weather_condition is not None and any(
+            w in (weather_condition or "").lower()
+            for w in ["rain", "drizzle", "thunderstorm", "shower"]
+        ),
 
         # ── Metadata ──────────────────────────────────────────────────────────
         "hour_bucket":   joined.get("hour_bucket"),

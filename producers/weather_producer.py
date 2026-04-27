@@ -83,15 +83,23 @@ def _mock_weather() -> List[dict]:
         base   = _BASE_TEMPS.get(province["name"], 28)
         temp   = round(base + random.uniform(-3, 5), 1)
         humid  = round(random.uniform(55, 95), 1)
-        cond   = random.choice(["Clear", "Clouds", "Rain", "Thunderstorm"])
+        cond   = random.choice(["Clear", "Clouds", "Rain", "Thunderstorm", "Drizzle"])
+        _MOCK_DESC = {
+            "Clear":       "clear sky",
+            "Clouds":      "scattered clouds",
+            "Rain":        "moderate rain",
+            "Thunderstorm": "thunderstorm with rain",
+            "Drizzle":     "light intensity drizzle",
+        }
 
         records.append({
-            "timestamp":         now,
-            "province":          province["name"],
-            "temperature":       temp,
-            "humidity":          humid,
-            "weather_condition": cond,
-            "source":            "mock",
+            "timestamp":           now,
+            "province":            province["name"],
+            "temperature":         temp,
+            "humidity":            humid,
+            "weather_condition":   cond,
+            "weather_description": _MOCK_DESC.get(cond, cond.lower()),
+            "source":              "mock",
         })
     return records
 
@@ -121,8 +129,9 @@ def _fetch_openweather(province: dict) -> Optional[dict]:
         "province":          province["name"],
         "temperature":       data["main"]["temp"],
         "humidity":          data["main"]["humidity"],
-        "weather_condition": data["weather"][0]["main"] if data.get("weather") else None,
-        "source":            "openweather",
+        "weather_condition":   data["weather"][0]["main"]        if data.get("weather") else None,
+        "weather_description": data["weather"][0]["description"] if data.get("weather") else None,
+        "source":              "openweather",
     }
 
 
