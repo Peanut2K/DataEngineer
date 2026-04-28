@@ -39,11 +39,6 @@ _RISK_LEVELS    = ["Low", "Medium", "High", "Very High"]
 # Probability weights for each risk level (realistic skew toward lower risk)
 _RISK_WEIGHTS   = [0.45, 0.30, 0.18, 0.07]
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _message_id(date_str: str, province: str, flood_risk: str) -> str:
     raw = f"{date_str}|{province}|{flood_risk}"
     return hashlib.md5(raw.encode()).hexdigest()

@@ -50,10 +50,6 @@ _THAI_TO_EN = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _message_id(timestamp: str, province: str, pm25: float) -> str:
     raw = f"{timestamp}|{province}|{pm25}"
     return hashlib.md5(raw.encode()).hexdigest()

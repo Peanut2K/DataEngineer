@@ -37,11 +37,6 @@ logger = get_logger("weather_producer")
 
 _STATE_FILE = os.path.join("logs", "weather_state.json")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _message_id(timestamp: str, province: str, temperature: float) -> str:
     raw = f"{timestamp}|{province}|{temperature}"
     return hashlib.md5(raw.encode()).hexdigest()
